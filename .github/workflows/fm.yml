@@ -1,0 +1,133 @@
+name: FongMi APK Auto Updater
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 17 */2 * *" # 每2天北京时间凌晨1点运行（UTC时间9点）
+  workflow_dispatch: # 支持手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 获取当前版本
+        id: local_version
+        run: |
+          if [ -f version.txt ]; then
+            LOCAL_VERSION=$(cat version.txt)
+            echo "当前版本: $LOCAL_VERSION"
+            echo "LOCAL_VERSION=$LOCAL_VERSION" >> $GITHUB_ENV
+          else
+            echo "首次同步，创建版本记录"
+            echo "LOCAL_VERSION=0" >> $GITHUB_ENV
+          fi
+
+      - name: 获取最新文件信息
+        id: get_file_info
+        run: |
+          # 配置目标文件列表
+          APK_FILES=(
+            "apk/release/leanback-arm64_v8a.apk"
+            "apk/release/leanback-armeabi_v7a.apk"
+          )
+          
+          # 初始化版本变量
+          SHA_VALUES=""
+          DOWNLOAD_URLS=""
+          
+          # 遍历每个文件获取信息
+          for FILE_PATH in "${APK_FILES[@]}"; do
+            echo "处理文件: $FILE_PATH"
+            
+            # 获取文件最新提交信息
+            API_URL="https://api.github.com/repos/FongMi/Release/commits?path=$FILE_PATH&sha=fongmi&per_page=1"
+            RESPONSE=$(curl -sL "$API_URL")
+            
+            # 提取最新提交SHA
+            FILE_SHA=$(echo "$RESPONSE" | jq -r '.[0].sha')
+            if [ -z "$FILE_SHA" ] || [ "$FILE_SHA" = "null" ]; then
+              echo "::error::无法获取文件 $FILE_PATH 的版本信息"
+              exit 1
+            fi
+            
+            # 构建下载URL
+            FILE_URL="https://github.com/FongMi/Release/raw/fongmi/$FILE_PATH"
+            
+            # 添加到组合变量
+            SHA_VALUES+="$FILE_SHA|"
+            DOWNLOAD_URLS+="$FILE_URL|"
+            
+            echo "文件版本: $FILE_SHA"
+            echo "下载链接: $FILE_URL"
+          done
+          
+          # 存储组合版本和下载链接（移除末尾的|）
+          echo "LATEST_SHA=${SHA_VALUES%|}" >> $GITHUB_ENV
+          echo "DOWNLOAD_URLS=${DOWNLOAD_URLS%|}" >> $GITHUB_ENV
+          echo "APK_FILES_COUNT=${#APK_FILES[@]}" >> $GITHUB_ENV
+
+      - name: 检查更新
+        id: check_update
+        run: |
+          if [ "$LOCAL_VERSION" = "$LATEST_SHA" ]; then
+            echo "::notice::当前已是最新版本"
+            echo "UPDATE_NEEDED=false" >> $GITHUB_ENV
+          else
+            echo "::warning::发现新版本 $LATEST_SHA (当前: $LOCAL_VERSION)"
+            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
+          fi
+
+      - name: 下载新版本APK
+        if: env.UPDATE_NEEDED == 'true'
+        run: |
+          # 将组合变量拆分为数组
+          IFS='|' read -ra URL_ARRAY <<< "$DOWNLOAD_URLS"
+          IFS='|' read -ra FILE_ARRAY <<< "$LATEST_SHA"
+          
+          # 确保数组数量一致
+          if [ ${#URL_ARRAY[@]} -ne $APK_FILES_COUNT ] || [ ${#FILE_ARRAY[@]} -ne $APK_FILES_COUNT ]; then
+            echo "::error::文件信息不匹配"
+            exit 1
+          fi
+          
+          # 下载每个文件
+          for i in "${!URL_ARRAY[@]}"; do
+            FILE_URL="${URL_ARRAY[$i]}"
+            FILE_PATH="${FILE_URL#*apk/release/}"
+            FILE_PATH="apk/release/$FILE_PATH"  # 保持目录结构
+            
+            echo "下载文件: $FILE_PATH"
+            mkdir -p $(dirname "$FILE_PATH")
+            wget -q -O "$FILE_PATH" "$FILE_URL"
+            
+            # 验证文件大小
+            FILE_SIZE=$(stat -c%s "$FILE_PATH")
+            if [ "$FILE_SIZE" -lt 1000000 ]; then
+              echo "::error::文件 $FILE_PATH 大小异常，可能下载失败"
+              exit 1
+            fi
+          done
+          
+          # 更新版本记录
+          echo "$LATEST_SHA" > version.txt
+          echo "✅ 所有APK文件更新完成"
+
+      - name: 提交更改
+        if: env.UPDATE_NEEDED == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "📱 更新APK文件到版本 ${{ env.LATEST_SHA }}"
+          commit_author: "GitHub Actions <actions@github.com>"
+          branch: main
+          file_pattern: |
+            version.txt
+            apk/release/
