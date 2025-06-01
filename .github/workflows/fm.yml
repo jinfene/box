@@ -19,80 +19,48 @@ jobs:
         with:
           fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
-          path: source # 明确指定克隆路径
-
-      - name: 准备环境
-        run: |
-          # 显示当前目录结构
-          echo "当前工作目录: $(pwd)"
-          ls -la
-          
-          # 确保目标目录存在
-          mkdir -p apk/release
-          
-          # 创建初始版本文件（如果不存在）
-          if [ ! -f version.txt ]; then
-            echo "首次运行，创建 version.txt"
-            echo "INITIAL" > version.txt
-          fi
 
       - name: 获取当前版本
         id: local_version
         run: |
-          # 确保在正确目录
-          cd source
           if [ -f version.txt ]; then
             LOCAL_VERSION=$(cat version.txt)
             echo "当前版本: $LOCAL_VERSION"
             echo "LOCAL_VERSION=$LOCAL_VERSION" >> $GITHUB_ENV
           else
             echo "首次同步，创建版本记录"
-            echo "INITIAL" > version.txt
-            echo "LOCAL_VERSION=INITIAL" >> $GITHUB_ENV
+            echo "LOCAL_VERSION=FIRST_RUN" >> $GITHUB_ENV
+            echo "FIRST_RUN" > version.txt
           fi
-          cat version.txt
 
       - name: 获取最新文件信息
         id: get_file_info
         run: |
-          # 配置目标文件列表
           APK_FILES=(
             "apk/release/leanback-arm64_v8a.apk"
             "apk/release/leanback-armeabi_v7a.apk"
           )
           
-          # 初始化版本变量
           SHA_VALUES=""
           DOWNLOAD_URLS=""
           
-          # 遍历每个文件获取信息
           for FILE_PATH in "${APK_FILES[@]}"; do
-            echo "===== 处理文件: $FILE_PATH ====="
+            echo "处理文件: $FILE_PATH"
             
-            # 获取文件最新提交信息
             API_URL="https://api.github.com/repos/FongMi/Release/commits?path=$FILE_PATH&sha=fongmi&per_page=1"
             RESPONSE=$(curl -sL "$API_URL")
-            echo "API响应: $RESPONSE"
-            
-            # 提取最新提交SHA
             FILE_SHA=$(echo "$RESPONSE" | jq -r '.[0].sha' || echo "")
             if [ -z "$FILE_SHA" ] || [ "$FILE_SHA" = "null" ]; then
               echo "::error::无法获取文件 $FILE_PATH 的版本信息"
               exit 1
             fi
             
-            # 构建下载URL
             FILE_URL="https://github.com/FongMi/Release/raw/fongmi/$FILE_PATH"
-            
-            # 添加到组合变量
             SHA_VALUES+="$FILE_SHA|"
             DOWNLOAD_URLS+="$FILE_URL|"
-            
             echo "文件版本: $FILE_SHA"
-            echo "下载链接: $FILE_URL"
           done
           
-          # 存储组合版本和下载链接（移除末尾的|）
           if [ -n "$SHA_VALUES" ] && [ -n "$DOWNLOAD_URLS" ]; then
             echo "LATEST_SHA=${SHA_VALUES%|}" >> $GITHUB_ENV
             echo "DOWNLOAD_URLS=${DOWNLOAD_URLS%|}" >> $GITHUB_ENV
@@ -104,79 +72,47 @@ jobs:
       - name: 检查更新
         id: check_update
         run: |
-          echo "当前版本: $LOCAL_VERSION"
-          echo "最新版本: $LATEST_SHA"
-          
-          if [ "$LOCAL_VERSION" = "$LATEST_SHA" ]; then
+          if [ "$LOCAL_VERSION" = "FIRST_RUN" ] || [ "$LOCAL_VERSION" != "$LATEST_SHA" ]; then
+            echo "::warning::需要更新 (当前: $LOCAL_VERSION, 最新: $LATEST_SHA)"
+            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
+          else
             echo "::notice::当前已是最新版本"
             echo "UPDATE_NEEDED=false" >> $GITHUB_ENV
-          else
-            echo "::warning::发现新版本 $LATEST_SHA (当前: $LOCAL_VERSION)"
-            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
           fi
 
       - name: 下载新版本APK
         if: env.UPDATE_NEEDED == 'true'
         run: |
-          # 确保在项目根目录
-          cd source
-          
-          # 显示目录结构
-          echo "下载前目录内容:"
-          ls -la apk/release || echo "apk/release目录不存在"
-          
-          # 拆分下载链接数组
           IFS='|' read -ra URL_ARRAY <<< "$DOWNLOAD_URLS"
           
-          # 下载每个文件
           for i in "${!URL_ARRAY[@]}"; do
             FILE_URL="${URL_ARRAY[$i]}"
-            FILE_NAME=$(basename "$FILE_URL")
-            FILE_PATH="apk/release/$FILE_NAME"
+            FILE_PATH="apk/release/$(basename "$FILE_URL")"
             
-            echo "下载文件: $FILE_URL 到 $FILE_PATH"
+            echo "下载文件: $FILE_PATH"
             mkdir -p apk/release
             wget -q --tries=3 -O "$FILE_PATH" "$FILE_URL"
             
-            # 验证文件大小
-            FILE_SIZE=$(stat -c%s "$FILE_PATH" 2>/dev/null || stat -f%z "$FILE_PATH")
-            echo "文件大小: $FILE_SIZE bytes"
-            
+            FILE_SIZE=$(wc -c < "$FILE_PATH" | awk '{print $1}')
             if [ "$FILE_SIZE" -lt 1000000 ]; then
-              echo "::error::文件 $FILE_PATH 大小异常 ($FILE_SIZE bytes)，可能下载失败"
+              echo "::error::文件 $FILE_PATH 大小异常 ($FILE_SIZE bytes)"
               exit 1
             fi
           done
           
-          # 更新版本记录
           echo "$LATEST_SHA" > version.txt
-          echo "✅ 所有APK文件更新完成"
-          
-          # 显示下载后的文件
-          echo "下载后目录内容:"
-          ls -l apk/release
+          echo "✅ APK文件更新完成"
 
       - name: 添加文件到Git
         if: env.UPDATE_NEEDED == 'true'
         run: |
-          cd source
-          
-          # 配置Git用户信息
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
-          
-          # 显示变更状态
-          echo "变更文件:"
-          git status
-          git diff --name-only
-          
-          # 添加所有更改
           git add -A
+          git status
           
-          # 检查是否有文件需要提交
           if [ -n "$(git status --porcelain)" ]; then
-            echo "检测到文件更改:"
-            git status --porcelain
+            echo "检测到文件更改"
           else
             echo "没有文件需要提交"
             echo "NO_CHANGES=true" >> $GITHUB_ENV
@@ -185,7 +121,6 @@ jobs:
       - name: 提交更改
         if: env.UPDATE_NEEDED == 'true' && env.NO_CHANGES != 'true'
         run: |
-          cd source
           git commit -m "📱 更新APK文件到版本 $LATEST_SHA"
           git push origin main
           echo "✅ 更改已提交"
