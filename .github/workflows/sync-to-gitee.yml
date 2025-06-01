@@ -1,75 +1,66 @@
-name: Sync to Gitee
+name: Sync APKs to Gitee
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: write
+  workflow_run:
+    workflows: ["APK Auto Updater"] # 您之前的APK更新工作流名称
+    types: [completed]
+  workflow_dispatch: # 支持手动触发
 
 jobs:
-  sync:
+  sync_to_gitee:
     runs-on: ubuntu-latest
+    env:
+      WORK_DIR: "/home/user/norebox/bbox" # 根据您的截图设置
+      
     steps:
-      # 1. 检出GitHub仓库
       - name: 检出GitHub仓库
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 获取完整历史
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      # 2. 设置Gitee同步认证
-      - name: 配置Gitee认证
+          path: ${{ env.WORK_DIR }}
+          
+      - name: 配置Gitee环境
         run: |
-          # 设置全局用户信息
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-
-          # 添加Gitee远程仓库
-          git remote add gitee https://${{ secrets.neural-crocodile }}:${{ secrets.c6ef158406fad0a9163c59cd0fcb3b58 }}@gitee.com/${{ secrets.neural-crocodile/fm }}.git
-
-      # 3. 检查Gitee连接
-      - name: 验证Gitee连接
+          cd ${{ env.WORK_DIR }}
+          
+          # 应用Gitee推荐的全局设置（来自截图）
+          git config --global user.name "神经鳄"
+          git config --global user.email "972341412@qq.com"
+          
+          # 添加Gitee远程
+          git remote add gitee https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_PASSWORD }}@gitee.com/neural-crocodile/box.git
+          
+      - name: 推送APK文件
         run: |
-          git ls-remote --heads gitee
-
-      # 4. 同步到Gitee（强制推送）
-      - name: 推送到Gitee
+          cd ${{ env.WORK_DIR }}
+          
+          # 仅推送必要的APK文件和版本记录
+          git push gitee HEAD:main -- \
+            apk/release/leanback-arm64_v8a.apk \
+            apk/release/leanback-armeabi_v7a.apk \
+            version.txt
+          
+          echo "✅ APK文件已同步到Gitee仓库"
+          
+      - name: 更新仓库信息
         run: |
-          # 处理可能的审核内容
-          if [ -f "content_approval.txt" ]; then
-            echo "审核标记文件存在，添加提交信息"
-            git add content_approval.txt
-            git commit -m "📝 添加内容审核标记" || echo "无需提交"
-          fi
-
-          # 强制推送到Gitee
-          git push gitee main:main --force
-
-          echo "✅ 已同步到Gitee仓库"
-
-      # 5. 设置Gitee内容审核标记
-      - name: 添加审核标记
+          cd ${{ env.WORK_DIR }}
+          
+          # 生成同步记录文件
+          echo "# 仓库同步信息" > SYNC_INFO.md
+          echo "最后同步时间: $(date '+%Y-%m-%d %H:%M:%S')" >> SYNC_INFO.md
+          echo "来源仓库: [$GITHUB_REPOSITORY](https://github.com/$GITHUB_REPOSITORY)" >> SYNC_INFO.md
+          echo "同步文件:" >> SYNC_INFO.md
+          echo "- leanback-arm64_v8a.apk" >> SYNC_INFO.md
+          echo "- leanback-armeabi_v7a.apk" >> SYNC_INFO.md
+          
+          # 添加并提交同步记录
+          git add SYNC_INFO.md
+          git commit -m "📝 更新同步记录" || echo "无新同步记录"
+          git push gitee HEAD:main
+          
+      - name: 完成通知
         run: |
-          # 创建内容审核标记文件
-          echo "此仓库内容需人工审核" > content_approval.txt
-          echo "同步时间: $(date)" >> content_approval.txt
-          echo "同步来源: $GITHUB_REPOSITORY" >> content_approval.txt
-
-          # 提交审核标记
-          git add content_approval.txt
-          git commit -m "📝 添加内容审核标记" || echo "已存在标记"
-
-          # 更新到Gitee
-          git push gitee main:main
-
-      # 6. 通知机制（可选）
-      - name: 发送审核通知
-        if: success()
-        uses: dawidd6/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          echo "✅ 同步到Gitee完成"
+          echo "访问仓库: https://gitee.com/neural-crocodile/box"
