@@ -37,7 +37,7 @@ jobs:
         id: get_file_info
         run: |
           APK_FILES=(
-            "apk/release/mobile-arm64_v8a.apk"      
+            "apk/release/leanback-arm64_v8a.apk"      
             "apk/release/leanback-armeabi_v7a.apk"
           )
           
