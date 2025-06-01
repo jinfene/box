@@ -18,7 +18,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          # 添加 token 确保有写入权限
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 获取当前版本
@@ -55,7 +54,7 @@ jobs:
             RESPONSE=$(curl -sL "$API_URL")
             
             # 提取最新提交SHA
-            FILE_SHA=$(echo "$RESPONSE" | jq -r '.[0].sha')
+            FILE_SHA=$(echo "$RESPONSE" | jq -r '.[0].sha' || echo "")
             if [ -z "$FILE_SHA" ] || [ "$FILE_SHA" = "null" ]; then
               echo "::error::无法获取文件 $FILE_PATH 的版本信息"
               exit 1
@@ -67,4 +66,81 @@ jobs:
             # 添加到组合变量
             SHA_VALUES+="$FILE_SHA|"
             DOWNLOAD_URLS+="$FILE_URL|"
-   
+            
+            echo "文件版本: $FILE_SHA"
+            echo "下载链接: $FILE_URL"
+          done
+          
+          # 存储组合版本和下载链接（移除末尾的|）
+          if [ -n "$SHA_VALUES" ] && [ -n "$DOWNLOAD_URLS" ]; then
+            echo "LATEST_SHA=${SHA_VALUES%|}" >> $GITHUB_ENV
+            echo "DOWNLOAD_URLS=${DOWNLOAD_URLS%|}" >> $GITHUB_ENV
+            echo "APK_FILES_COUNT=${#APK_FILES[@]}" >> $GITHUB_ENV
+          else
+            echo "::error::无法获取文件版本或下载链接"
+            exit 1
+          fi
+
+      - name: 检查更新
+        id: check_update
+        run: |
+          if [ "$LOCAL_VERSION" = "$LATEST_SHA" ]; then
+            echo "::notice::当前已是最新版本"
+            echo "UPDATE_NEEDED=false" >> $GITHUB_ENV
+          else
+            echo "::warning::发现新版本 $LATEST_SHA (当前: $LOCAL_VERSION)"
+            echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
+          fi
+
+      - name: 下载新版本APK
+        if: env.UPDATE_NEEDED == 'true'
+        run: |
+          # 将组合变量拆分为数组
+          IFS='|' read -ra URL_ARRAY <<< "$DOWNLOAD_URLS"
+          
+          # 下载每个文件
+          for i in "${!URL_ARRAY[@]}"; do
+            FILE_URL="${URL_ARRAY[$i]}"
+            FILE_PATH="${FILE_URL#*apk/release/}"
+            FILE_PATH="apk/release/$FILE_PATH"
+            
+            echo "下载文件: $FILE_PATH"
+            mkdir -p $(dirname "$FILE_PATH")
+            wget -q --tries=3 -O "$FILE_PATH" "$FILE_URL"
+            
+            # 验证文件大小
+            FILE_SIZE=$(stat -c%s "$FILE_PATH" 2>/dev/null || stat -f%z "$FILE_PATH")
+            if [ "$FILE_SIZE" -lt 1000000 ]; then
+              echo "::error::文件 $FILE_PATH 大小异常 ($FILE_SIZE bytes)，可能下载失败"
+              exit 1
+            fi
+          done
+          
+          # 更新版本记录
+          echo "$LATEST_SHA" > version.txt
+          echo "✅ 所有APK文件更新完成"
+
+      - name: 添加文件到Git
+        if: env.UPDATE_NEEDED == 'true'
+        run: |
+          # 配置Git用户信息
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          
+          # 添加所有更改
+          git add -A
+          git status
+          
+          # 检查是否有文件需要提交
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "检测到文件更改"
+          else
+            echo "没有文件需要提交"
+            echo "NO_CHANGES=true" >> $GITHUB_ENV
+          fi
+
+      - name: 提交更改
+        if: env.UPDATE_NEEDED == 'true' && env.NO_CHANGES != 'true'
+        run: |
+          git commit -m "📱 更新APK文件到版本 $LATEST_SHA"
+          git push origin main
