@@ -36,8 +36,9 @@ jobs:
       - name: 获取最新文件信息
         id: get_file_info
         run: |
+          # 修改点1：替换为 mobile-arm64_v8a.apk
           APK_FILES=(
-            "apk/release/leanback-arm64_v8a.apk"      
+            "apk/release/mobile-arm64_v8a.apk"  # 从这里修改👇
             "apk/release/leanback-armeabi_v7a.apk"
           )
           
@@ -87,6 +88,7 @@ jobs:
           
           for i in "${!URL_ARRAY[@]}"; do
             FILE_URL="${URL_ARRAY[$i]}"
+            # 修改点2：确保文件路径正确
             FILE_PATH="apk/release/$(basename "$FILE_URL")"
             
             echo "下载文件: $FILE_PATH"
