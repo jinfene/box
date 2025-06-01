@@ -1,4 +1,4 @@
-name: Sync APKs to Gitee
+name: APK Sync & Version Control
 
 on:
   push:
@@ -8,42 +8,59 @@ on:
       - 'apk/release/app-release.json'
 
 jobs:
-  sync-files:
+  sync:
     runs-on: ubuntu-latest
+    env:
+      LOCAL_VERSION: ${GITHUB_SHA}  # 使用实际提交SHA
+      LATEST_SHA: ${{ github.sha }}
+      
     steps:
-      # 1. 检出当前GitHub仓库
-      - name: Checkout GitHub repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    # 步骤1: 检出当前仓库
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      # 2. 配置Git信息
-      - name: Setup Git
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-
-      # 3. 克隆Gitee仓库（使用master分支，根据图片）
-      - name: Clone Gitee repository
-        run: |
-          git clone -b master https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_TOKEN }}@gitee.com/${{ secrets.GITEE_REPO }}.git gitee-repo
-
-      # 4. 复制指定文件
-      - name: Copy APK files
-        run: |
-          mkdir -p gitee-repo/apk/release
-          cp -v apk/release/app-release.apk gitee-repo/apk/release/
-          cp -v apk/release/app-release.json gitee-repo/apk/release/
-
-      # 5. 提交并推送到Gitee
-      - name: Commit and push to Gitee
-        run: |
-          cd gitee-repo
-          git add apk/release/
-          if git diff-index --quiet HEAD --; then
-            echo "No changes to commit"
-          else
-            git commit -m "chore: Sync APK files from GitHub (Commit ${{ github.sha }})"
-            git push origin master
-            echo "Changes pushed to Gitee"
-          fi
+    # 步骤2: 版本检测（图片中的核心逻辑）
+    - name: Version Check
+      run: |
+        if [ "$LOCAL_VERSION" = "FIRST_RUN" ] || [ "$LOCAL_VERSION" != "$LATEST_SHA" ]; then
+          echo "::warning::需变更新 (当前：$LOCAL_VERSION, 最新：$LATEST_SHA)"
+          echo "UPDATE_NEEDED=true" >> $GITHUB_ENV
+        else
+          echo "::notice::当前已是最新版本"
+          echo "UPDATE_NEEDED=false" >> $GITHUB_ENV
+        fi
+      shell: bash
+      
+    # 步骤3: 仅当需要更新时同步到Gitee
+    - name: Gitee Sync
+      if: env.UPDATE_NEEDED == 'true'
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+        # 克隆Gitee仓库
+        git clone -b master "https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_TOKEN }}@gitee.com/${{ secrets.GITEE_REPO }}.git" gitee-repo
+        
+        # 复制APK文件
+        mkdir -p gitee-repo/apk/release
+        cp apk/release/app-release.apk gitee-repo/apk/release/
+        cp apk/release/app-release.json gitee-repo/apk/release/
+        
+        # 提交更新
+        cd gitee-repo
+        git add .
+        git commit -m "chore: 同步更新 (${LATEST_SHA:0:8})"
+        git push origin master
+      
+    # 步骤4: 文件下载示例（扩展功能）
+    - name: APK Download
+      if: env.UPDATE_NEEDED == 'true'
+      run: |
+        echo "##[group]🔍 检测到新版本"
+        echo "最新SHA: $LATEST_SHA"
+        echo "下载链接:"
+        echo "https://github.com/${{ github.repository }}/raw/main/apk/release/app-release.apk"
+        echo "https://github.com/${{ github.repository }}/raw/main/apk/release/app-release.json"
+        echo "##[endgroup]"
