@@ -1,66 +1,124 @@
-name: Sync APKs to Gitee
+name: Sync APKs to Gitee - Fixed
 
 on:
   workflow_run:
-    workflows: ["APK Auto Updater"] # 您之前的APK更新工作流名称
+    workflows: ["APK Auto Updater"] # 确保与您更新APK的工作流名称匹配
     types: [completed]
-  workflow_dispatch: # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   sync_to_gitee:
     runs-on: ubuntu-latest
-    env:
-      WORK_DIR: "/home/user/norebox/bbox" # 根据您的截图设置
-      
     steps:
-      - name: 检出GitHub仓库
+      # 1. 创建工作目录（根据截图）
+      - name: 创建工作目录
+        run: |
+          echo "正在创建Gitee截图要求的工作目录结构..."
+          # 创建一级目录 box (Gitee截图中的第一步)
+          mkdir -p box
+          cd box
+          
+          # 创建APK存储目录（二级目录）
+          mkdir -p apk/release
+          
+          echo "✅ 目录结构创建完成:"
+          tree || ls -R
+          
+          # 保存工作目录路径
+          echo "WORK_DIR=$(pwd)" >> $GITHUB_ENV
+          
+      # 2. 检出GitHub仓库（复制所需文件）
+      - name: 准备APK文件
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-          path: ${{ env.WORK_DIR }}
+          path: source-repo # 检出到临时目录
           
-      - name: 配置Gitee环境
+        # 复制文件到工作目录
         run: |
-          cd ${{ env.WORK_DIR }}
+          echo "从GitHub仓库复制APK文件..."
           
-          # 应用Gitee推荐的全局设置（来自截图）
+          # 复制版本文件
+          if [ -f source-repo/version.txt ]; then
+            cp source-repo/version.txt ${{ env.WORK_DIR }}/version.txt
+          fi
+          
+          # 复制APK文件
+          if [ -f source-repo/apk/release/leanback-arm64_v8a.apk ]; then
+            cp source-repo/apk/release/leanback-arm64_v8a.apk ${{ env.WORK_DIR }}/apk/release/
+          fi
+          
+          if [ -f source-repo/apk/release/leanback-armeabi_v7a.apk ]; then
+            cp source-repo/apk/release/leanback-armeabi_v7a.apk ${{ env.WORK_DIR }}/apk/release/
+          fi
+          
+          echo "✅ 文件复制完成"
+          ls -R ${{ env.WORK_DIR }} || tree ${{ env.WORK_DIR }}
+      
+      # 3. 配置Git环境（根据Gitee截图）
+      - name: 配置Git全局设置
+        run: |
+          # 严格按照Gitee截图配置
           git config --global user.name "神经鳄"
           git config --global user.email "972341412@qq.com"
+          echo "✅ Git全局配置完成"
           
-          # 添加Gitee远程
-          git remote add gitee https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_PASSWORD }}@gitee.com/neural-crocodile/box.git
-          
-      - name: 推送APK文件
+      # 4. 初始化Git仓库（根据Gitee截图）
+      - name: 初始化Git仓库
         run: |
           cd ${{ env.WORK_DIR }}
           
-          # 仅推送必要的APK文件和版本记录
-          git push gitee HEAD:main -- \
-            apk/release/leanback-arm64_v8a.apk \
-            apk/release/leanback-armeabi_v7a.apk \
-            version.txt
+          # 初始化仓库（Gitee截图第一步）
+          git init
           
-          echo "✅ APK文件已同步到Gitee仓库"
+          # 创建初始README（Gitee要求）
+          echo "# TVBox APK 仓库" > README.md
+          echo "此仓库同步来自 GitHub 的 APK 文件" >> README.md
+          echo "- 同步时间: $(date '+%Y-%m-%d %H:%M:%S')" >> README.md
+          echo "- 来源仓库: $GITHUB_REPOSITORY" >> README.md
           
-      - name: 更新仓库信息
+          # 添加初始文件
+          git add README.md
+          git commit -m "📝 初始化仓库（由GitHub Actions创建）"
+          
+          echo "✅ 仓库初始化完成"
+          git log --oneline
+      
+      # 5. 连接到Gitee仓库（根据截图分支为master）
+      - name: 连接到Gitee
         run: |
           cd ${{ env.WORK_DIR }}
           
-          # 生成同步记录文件
-          echo "# 仓库同步信息" > SYNC_INFO.md
-          echo "最后同步时间: $(date '+%Y-%m-%d %H:%M:%S')" >> SYNC_INFO.md
-          echo "来源仓库: [$GITHUB_REPOSITORY](https://github.com/$GITHUB_REPOSITORY)" >> SYNC_INFO.md
-          echo "同步文件:" >> SYNC_INFO.md
-          echo "- leanback-arm64_v8a.apk" >> SYNC_INFO.md
-          echo "- leanback-armeabi_v7a.apk" >> SYNC_INFO.md
+          # 添加Gitee远程（使用截图中的地址）
+          git remote add origin git@gitee.com:neural-crocodile/box.git
           
-          # 添加并提交同步记录
-          git add SYNC_INFO.md
-          git commit -m "📝 更新同步记录" || echo "无新同步记录"
-          git push gitee HEAD:main
+          # 强制推送到master分支（Gitee默认分支）
+          git push -u origin master --force
           
-      - name: 完成通知
+          echo "✅ 初始化仓库已推送到Gitee"
+      
+      # 6. 添加APK文件并同步
+      - name: 添加并同步APK文件
         run: |
-          echo "✅ 同步到Gitee完成"
-          echo "访问仓库: https://gitee.com/neural-crocodile/box"
+          cd ${{ env.WORK_DIR }}
+          
+          # 添加所有文件
+          git add .
+          
+          # 提交更新
+          git commit -m "📱 添加APK文件: $(date '+%Y-%m-%d')"
+          
+          # 推送到Gitee
+          git push origin master
+          
+          echo "✅ APK文件已成功同步到Gitee"
+          
+      # 7. 验证同步结果
+      - name: 验证同步
+        run: |
+          echo "访问您的Gitee仓库查看文件:"
+          echo "https://gitee.com/neural-crocodile/box"
+          echo "仓库应包含以下文件:"
+          echo "- README.md"
+          echo "- version.txt"
+          echo "- apk/release/leanback-arm64_v8a.apk"
+          echo "- apk/release/leanback-armeabi_v7a.apk"
